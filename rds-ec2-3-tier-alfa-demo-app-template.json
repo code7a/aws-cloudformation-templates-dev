@@ -94,15 +94,15 @@
         "KeyPair":{
             "Type":"AWS::EC2::KeyPair",
             "Properties":{
-                "KeyName":{"Ref":"AWS::StackName"},
+                "KeyName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-KeyPair"]]},
                 "PublicKeyMaterial":"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCQ4VU2GCR4WvjrX/rQ2NFVcbHHKXb69Hsx4NKbZkcnubte4UGBGmzLF9dCkrjYIHM/l/+XY1Hxv7AyLP8ou3YL0wAkuStSaioqf0n8oVDDz0spB3oJI2fGH++t72d7LGzKXlp3ZCVmv7HHuUrbVnegff1b+hSrZTwvLnNVr29MuqWiHxEpfQhYmyadl3HTVPrDJdgmLl+PjPneZnXEQyhYxVRyxIHkdm3fKT0fDzH9CvEhfKSWuy/pra/RVoknfKiCYsKPsDkfddeBvw/4zadbr1kXunvVl7maI/1Lf12bhlncVRzozoL76H338O8vMTt5YHcPCaZraWRJvj1/Hig22mhrZPmYnmGkG+pc8eL4q4ErgXF6xDyPI6Aol2MsphX3zQ63JrvAFynrkkmjxO3AG70zhuDs+zp7mLpZ+jrUc/Mo45Y4ZVOQ7304DNRgAoQkL4MsTXH3D6EosbMi3pf1Dniar8hQnU8G/uM0P7+40n9Bs5OSP+fNIeJ+z0ntKVU="
             }
         },
         "SecurityGroup":{
             "Type":"AWS::EC2::SecurityGroup",
             "Properties":{
-                "GroupDescription":{"Ref":"AWS::StackName"},
-                "GroupName":{"Ref":"AWS::StackName"},
+                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroup"]]},
+                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroup"]]},
                 "SecurityGroupIngress":[{"IpProtocol":"-1","CidrIp":"0.0.0.0/0"}],
                 "VpcId":{"Ref":"VPC"}
             },
@@ -111,8 +111,8 @@
         "DBSubnetGroup":{
             "Type":"AWS::RDS::DBSubnetGroup",
             "Properties":{
-                "DBSubnetGroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-alfa-db_subnet_group"]]},
-                "DBSubnetGroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-alfa-db_subnet_group"]]},
+                "DBSubnetGroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-DBSubnetGroup"]]},
+                "DBSubnetGroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-DBSubnetGroup"]]},
                 "SubnetIds":[{"Ref":"SubnetA"},{"Ref":"SubnetB"}]
             },
             "DependsOn":"SubnetBRouteTableAssociation"
@@ -122,7 +122,7 @@
             "Properties":{
                 "AllocatedStorage":"20",
                 "DBInstanceClass":"db.t4g.micro",
-                "DBInstanceIdentifier":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-alfa-db"]]},
+                "DBInstanceIdentifier":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-DBInstance"]]},
                 "DBName":"DBName",
                 "DBSubnetGroupName":{"Ref":"DBSubnetGroup"},
                 "Engine":"mysql",
