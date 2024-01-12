@@ -98,15 +98,45 @@
                 "PublicKeyMaterial":"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCQ4VU2GCR4WvjrX/rQ2NFVcbHHKXb69Hsx4NKbZkcnubte4UGBGmzLF9dCkrjYIHM/l/+XY1Hxv7AyLP8ou3YL0wAkuStSaioqf0n8oVDDz0spB3oJI2fGH++t72d7LGzKXlp3ZCVmv7HHuUrbVnegff1b+hSrZTwvLnNVr29MuqWiHxEpfQhYmyadl3HTVPrDJdgmLl+PjPneZnXEQyhYxVRyxIHkdm3fKT0fDzH9CvEhfKSWuy/pra/RVoknfKiCYsKPsDkfddeBvw/4zadbr1kXunvVl7maI/1Lf12bhlncVRzozoL76H338O8vMTt5YHcPCaZraWRJvj1/Hig22mhrZPmYnmGkG+pc8eL4q4ErgXF6xDyPI6Aol2MsphX3zQ63JrvAFynrkkmjxO3AG70zhuDs+zp7mLpZ+jrUc/Mo45Y4ZVOQ7304DNRgAoQkL4MsTXH3D6EosbMi3pf1Dniar8hQnU8G/uM0P7+40n9Bs5OSP+fNIeJ+z0ntKVU="
             }
         },
-        "SecurityGroup":{
+        "SecurityGroupIngressAllowAll":{
             "Type":"AWS::EC2::SecurityGroup",
             "Properties":{
-                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroup"]]},
-                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroup"]]},
+                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowAll"]]},
+                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowAll"]]},
                 "SecurityGroupIngress":[{"IpProtocol":"-1","CidrIp":"0.0.0.0/0"}],
                 "VpcId":{"Ref":"VPC"}
             },
-            "DependsOn":"SubnetBRouteTableAssociation"
+            "DependsOn":"VPC"
+        },
+        "SecurityGroupIngressAllowHTTPFromAll":{
+            "Type":"AWS::EC2::SecurityGroup",
+            "Properties":{
+                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowHTTPFromAll"]]},
+                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowHTTPFromAll"]]},
+                "SecurityGroupIngress":[{"IpProtocol":"tcp","FromPort":"80","ToPort":"80","CidrIp":"0.0.0.0/0"}],
+                "VpcId":{"Ref":"VPC"}
+            },
+            "DependsOn":"VPC"
+        },
+        "SecurityGroupIngressAllowSSHFromVPN":{
+            "Type":"AWS::EC2::SecurityGroup",
+            "Properties":{
+                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowSSHFromVPN"]]},
+                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowSSHFromVPN"]]},
+                "SecurityGroupIngress":[{"IpProtocol":"tcp","FromPort":"22","ToPort":"22","CidrIp":"142.215.20.0/22"},{"IpProtocol":"tcp","FromPort":"22","ToPort":"22","CidrIp":"45.16.0.0/12"}],
+                "VpcId":{"Ref":"VPC"}
+            },
+            "DependsOn":"VPC"
+        },
+        "SecurityGroupIngressAllowSSHFromJumpbox":{
+            "Type":"AWS::EC2::SecurityGroup",
+            "Properties":{
+                "GroupDescription":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowSSHFromJumpbox"]]},
+                "GroupName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-SecurityGroupIngressAllowSSHFromJumpbox"]]},
+                "SecurityGroupIngress":[{"IpProtocol":"tcp","FromPort":"22","ToPort":"22","CidrIp":{"Fn::Join":["",[{"Fn::GetAtt":["InstanceJumpbox","PrivateIp"]},"/32"]]}}],
+                "VpcId":{"Ref":"VPC"}
+            },
+            "DependsOn":"InstanceJumpbox"
         },
         "InstanceNginx":{
             "Type":"AWS::EC2::Instance",
@@ -114,8 +144,9 @@
                 "ImageId":{"Fn::FindInMap":["RegionMap",{"Ref":"AWS::Region"},"AlmaLinuxOS9320231116x8664"]},
                 "InstanceType":"t3a.micro",
                 "KeyName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-KeyPair"]]},
-                "SecurityGroupIds":[{"Ref":"SecurityGroup"}],
+                "SecurityGroupIds":[{"Ref":"SecurityGroupIngressAllowHTTPFromAll"},{"Ref":"SecurityGroupIngressAllowSSHFromJumpbox"}],
                 "SubnetId":{"Ref":"SubnetA"},
+                "PrivateIpAddress":"10.0.0.80",
                 "Tags":[
                     {"Key":"Name","Value":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-beta-web"]]}},
                     {"Key":"App","Value":"beta"},
@@ -123,7 +154,7 @@
                 ],
                 "UserData":{"Fn::Base64":{"Fn::Sub":"#!/bin/bash\nyum install -y nginx\nsystemctl enable nginx\nsystemctl start nginx\n"}}
             },
-            "DependsOn":"SecurityGroup"
+            "DependsOn":["SecurityGroupIngressAllowHTTPFromAll","SecurityGroupIngressAllowSSHFromJumpbox"]
         },
         "InstanceJumpbox":{
             "Type":"AWS::EC2::Instance",
@@ -131,8 +162,9 @@
                 "ImageId":{"Fn::FindInMap":["RegionMap",{"Ref":"AWS::Region"},"AlmaLinuxOS9320231116x8664"]},
                 "InstanceType":"t3a.micro",
                 "KeyName":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-KeyPair"]]},
-                "SecurityGroupIds":[{"Ref":"SecurityGroup"}],
+                "SecurityGroupIds":[{"Ref":"SecurityGroupIngressAllowSSHFromVPN"}],
                 "SubnetId":{"Ref":"SubnetB"},
+                "PrivateIpAddress":"10.0.16.22",
                 "Tags":[
                     {"Key":"Name","Value":{"Fn::Join":["",[{"Ref":"AWS::StackName"},"-jumpbox"]]}},
                     {"Key":"App","Value":"jumpbox"},
@@ -141,10 +173,10 @@
                 "UserData":{"Fn::Base64":{ "Fn::Join": ["\n", [
                     "#!/bin/bash",
                     "echo '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn\nNhAAAAAwEAAQAAAYEAkOFVNhgkeFr461/60NjRVXGxxyl2+vR7MeDSm2ZHJ7m7XuFBgRps\nyxfXQpK42CBzP5f/l2NR8b+wMiz/KLt2C9MAJLkrUmoqKn9J/KFQw89LKQd6CSNnxh/vre\n9neyxsyl5ad2QlZr+xx7lK21Z3oH39W/oUq2U8Ly5zVa9vTLqloh8RKX0IWJsmnZdx01T6\nwyXYJi5fj4z53mZ1xEMoWMVUcsSB5HZt3yk9Hw8x/QrxIXyklrsv6a2v0VaJJ3yogmLCj7\nA5H3XXgb8P+M2nW69ZF7p71Ze5miP9S39dm4ZZ3FUc6M6C++h99/DvLzE7eWB3Dwmma2lk\nSb49fx4oNtpoa2T5mJ5hpBvqXPHi+KuBK4FxesQ8jyOgKJdjLKYV980Otya7wBcp65JJo8\nTtwBu9M4bg7Ps6e5i6Wfo61HPzKOOWOGVTkO99OAzUYAKEJC+DLE1x9w+hKLGzIt6X9Q54\nmq/IUJ1PBv7jND+/uNJ/QbOTkj/nzSHifs9J7SlVAAAFoOId0pfiHdKXAAAAB3NzaC1yc2\nEAAAGBAJDhVTYYJHha+Otf+tDY0VVxsccpdvr0ezHg0ptmRye5u17hQYEabMsX10KSuNgg\ncz+X/5djUfG/sDIs/yi7dgvTACS5K1JqKip/SfyhUMPPSykHegkjZ8Yf763vZ3ssbMpeWn\ndkJWa/sce5SttWd6B9/Vv6FKtlPC8uc1Wvb0y6paIfESl9CFibJp2XcdNU+sMl2CYuX4+M\n+d5mdcRDKFjFVHLEgeR2bd8pPR8PMf0K8SF8pJa7L+mtr9FWiSd8qIJiwo+wOR9114G/D/\njNp1uvWRe6e9WXuZoj/Ut/XZuGWdxVHOjOgvvofffw7y8xO3lgdw8JpmtpZEm+PX8eKDba\naGtk+ZieYaQb6lzx4virgSuBcXrEPI8joCiXYyymFffNDrcmu8AXKeuSSaPE7cAbvTOG4O\nz7OnuYuln6OtRz8yjjljhlU5DvfTgM1GAChCQvgyxNcfcPoSixsyLel/UOeJqvyFCdTwb+\n4zQ/v7jSf0Gzk5I/580h4n7PSe0pVQAAAAMBAAEAAAGAHYCdSwYwiwevb7LcTuIQAq/DzX\nQuo9zcJ2SKTpXNwJOsSZ5iKemZJORGc+qP1IcLIPSRWiEiAzIPLbCHByLhX3gIq/G/FinD\nS2MfTGAHI9CXFBRPMAQzMh+3vXomXulFgBIlpvFQQnOfvrWHPlIFyztMuAmdYuebEVqKpv\nSyG/RYHULpSkMJS43Ql7/KsIe6BroyoVfJIuDI0xaXPa+VTDpmv3YvozfQmOR7a1M7UTWE\ns9Z/Z6hXkeTKDD1scYuLMIwOyUJVE7cTj62cI00FM60Tx07dhvvUfp+1bjOE1odDVbiaiM\n/DWtL8duMWOCbUm09qDcc7OryWtfqux17YPexoe79EBKyQ9eii5d1GQAUwMP/2XFgOzVjD\n8tP+gGPdB7sIHsVdQYqmiVFcmA9dMdBce8WbeQrfdNDR/8+/pSUbxRTEcWBgIS0PRD7PpZ\ncVUe+filS0L8VutEvrpzyY3msWiUBy4gFiw0T4vNxVVi3cqdoJSdxd7Am8jQ6x/NiTAAAA\nwQCGdTDcK+U+gL2cwqlfiqlAiBD+RKTOAXbF5VzOukxhFEIU6y56bBU8HnOozbHqdlgqSn\nCCqI6t0XKmk1KDeO0bYY4PAs30/e9pxzqbAQq+eSF9M8FZKPVClxKzCHRjA1NhECONgbjn\n0zmm3d+lLcfoLYO5N7IUje28XsI1vb231jeewKZTYiFkTb94V9NygC5DP4tBpnZVD91vft\nItebTWUfW/QVA97aM2NVPynZenSLyr47TuNsFlRHQwydH/mmUAAADBAMOsChn170xuHN0V\n11oQ5xPpvlxs5OAhfgLyY7SQkwlCYQN/MlMPRKZnwHtvrkX4TTlgtCtmMbfU2tXM36QTk+\nwFyWOxv+vf6SCtu420+06ck0KNvOIjrjnGAZnx+RNv2+KBe4dSuismsDu4eUbI0BqU1t06\nf3Nkl11tdW1Ebs+I/wlmqcHuTOOt8QKZJEaA/BfzrpHXe/shw/TgmXXy7vDqkB455OH7Xt\no1YUMc1qHYPxzgLP1dyWrMtZT5Nzs54wAAAMEAvYxoO4t+7h9dv0EXr3iTkmB5pOBAq1V1\nu88p9+a5a9nC3iZ8zh5iruMEI04osETC5RVOS1fbhTDbKNEO8BUIFRGYNS1RGQcQd9BEQ9\n+vdqj18Z6Ya7trE+7TP+6Pga6qbHWT8FCxH2QMYrrEzDSrprSifG5xtcbGkrT74oATw4eF\n1GDSJECTkjve6vlwnfdfCQWQS5206G/9L1Dsf2e/8F+fxyrB8L4GmxxbTVEFfTxRbsom7S\nrwii5qXlYdhdVnAAAAJXJvb3RAZ29sZi5zbmMuMjMuNS4wLTE3ODMucHNsYWIuY2xpY2sB\nAgMEBQ==\n-----END OPENSSH PRIVATE KEY-----' > private_key.pem",
-                    {"Fn::Sub":"cat <<EOF | tee scp.sh\necho \\$(date) > /tmp/date.txt\nscp -i /private_key.pem /tmp/date.txt ec2-user@${InstanceNginx.PublicDnsName}:/tmp\nEOF\nchmod +x scp.sh\necho '* * * * * root /scp.sh >/dev/null 2>&1' > /etc/cron.d/scp"}
+                    {"Fn::Sub":"cat <<EOF | tee scp.sh\necho \\$(date) > /tmp/date.txt\nscp -i /private_key.pem /tmp/date.txt ec2-user@10.0.0.80:/tmp\nEOF\nchmod +x scp.sh\necho '* * * * * root /scp.sh >/dev/null 2>&1' > /etc/cron.d/scp"}
                 ]]}}
             },
-            "DependsOn":"SecurityGroup"
+            "DependsOn":"SecurityGroupIngressAllowSSHFromVPN"
         }
     }
 }
