@@ -1,0 +1,101 @@
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies: 
+        - PolicyName: create-vpc-flow-logs-dest-s3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:CreateBucket'
+                  - 's3:PutLifecycleConfiguration'
+                  - 's3:PutBucketPolicy'
+                Resource:
+                  - 'arn:aws:s3:::vpc-flow-logs-*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:CreateFlowLogs'
+                  - 'logs:CreateLogDelivery'
+                Resource: '*'
+  Function:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json,boto3,datetime,hashlib
+          def lambda_handler(event, context):
+              #get account number
+              account_number=boto3.client('sts').get_caller_identity().get('Account')
+              #get date
+              datetime_string=str(datetime.datetime.now())
+              #get md5 hash of date string, used for unique s3 bucket name
+              datetime_string_md5=hashlib.md5(datetime_string.encode()).hexdigest()
+              #create s3 bucket
+              client = boto3.client('s3',region_name='us-east-1')
+              response = client.create_bucket(Bucket='vpc-flow-logs-'+datetime_string_md5)
+              print(response)
+              #put bucket policy
+              response = client.put_bucket_policy(
+                  Bucket='vpc-flow-logs-'+datetime_string_md5,
+                  Policy='{"Version":"2012-10-17","Id":"AWSLogDeliveryWrite20150319","Statement":[{"Sid":"AWSLogDeliveryWrite","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},"Action":"s3:PutObject","Resource":"arn:aws:s3:::vpc-flow-logs-'+datetime_string_md5+'/AWSLogs/'+account_number+'/*","Condition":{"StringEquals":{"aws:SourceAccount":"'+account_number+'","s3:x-amz-acl":"bucket-owner-full-control"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:*:'+account_number+':*"}}},{"Sid":"AWSLogDeliveryAclCheck","Effect":"Allow","Principal":{"Service":"delivery.logs.amazonaws.com"},"Action":"s3:GetBucketAcl","Resource":"arn:aws:s3:::vpc-flow-logs-'+datetime_string_md5+'","Condition":{"StringEquals":{"aws:SourceAccount":"'+account_number+'"},"ArnLike":{"aws:SourceArn":"arn:aws:logs:*:'+account_number+':*"}}}]}'
+              )
+              print(response)
+              #create lifecycle rule, expire objects after 1 day
+              response = client.put_bucket_lifecycle_configuration(
+                  Bucket='vpc-flow-logs-'+datetime_string_md5,
+                  LifecycleConfiguration={
+                      'Rules': [{
+                          'Expiration': {'Days': 1},
+                          'ID': 'expire-rule',
+                          'Filter': {'Prefix': ''},
+                          'Status': 'Enabled',
+                          'NoncurrentVersionExpiration': {'NoncurrentDays': 1}
+                      }]
+                  }
+              )
+              print(response)
+              #for each region
+              client = boto3.client('ec2')
+              response = client.describe_regions()
+              Regions=response['Regions']
+              for Region in Regions:
+                  print(Region)
+                  #get vps
+                  client = boto3.client('ec2',region_name=Region['RegionName'])
+                  response = client.describe_vpcs()
+                  Vpcs=response['Vpcs']
+                  for Vpc in Vpcs:
+                      VpcId=Vpc['VpcId']
+                      print(VpcId)
+                      #create flow log
+                      response = client.create_flow_logs(
+                          ResourceIds=[VpcId],
+                          ResourceType='VPC',
+                          TrafficType='ALL',
+                          LogDestinationType='s3',
+                          LogDestination='arn:aws:s3:::vpc-flow-logs-'+datetime_string_md5
+                      )
+                      print(response)
+      Role:
+        'Fn::Join':
+          - ''
+          - - 'arn:aws:iam::'
+            - Ref: AWS::AccountId
+            - ':role/'
+            - Ref: Role
+      Runtime: python3.12
+      Timeout: 900
+    DependsOn:
+      - Role

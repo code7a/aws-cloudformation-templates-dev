@@ -1,0 +1,13 @@
+Resources:
+  Function:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+            print('test')
+      Role: 'arn:aws:iam::015065292568:role/jasonf-create-vpc-flow-logs'
+      Runtime: python3.12
+      Timeout: 900

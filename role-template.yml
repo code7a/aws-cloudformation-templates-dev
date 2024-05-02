@@ -1,0 +1,30 @@
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies: 
+        - PolicyName: create-vpc-flow-logs-dest-s3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:CreateBucket'
+                  - 's3:PutLifecycleConfiguration'
+                  - 's3:PutBucketPolicy'
+                Resource:
+                  - 'arn:aws:s3:::vpc-flow-logs-*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:CreateFlowLogs'
+                  - 'logs:CreateLogDelivery'
+                Resource: '*'
