@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: country-insights-135-tcp-demo (Seoul -> Ohio TCP 135)
+
+Parameters:
+  PeerPublicIp:
+    Type: String
+    Default: 0.0.0.0
+    Description: Public IP of peer instance
+
+  UniqueTag:
+    Type: String
+    Description: Unique tag value
+
+Conditions:
+  HasPeerIp: !Not [ !Equals [ !Ref PeerPublicIp, "0.0.0.0" ] ]
+
+Resources:
+
+  # -----------------------
+  # Networking
+  # -----------------------
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: country-insights-135-tcp-demo-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: test-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: country-insights-135-tcp-demo-rt
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.31.0.0/20
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: country-insights-135-tcp-demo-subnet
+
+  SubnetRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+
+  # -----------------------
+  # Security Group
+  # -----------------------
+
+  FlowTestSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: country-insights-135-tcp-demo SG
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: country-insights-135-tcp-demo-sg
+
+      SecurityGroupIngress:
+        - !If
+          - HasPeerIp
+          - IpProtocol: tcp
+            FromPort: 135
+            ToPort: 135
+            CidrIp: !Join [ "", [ !Ref PeerPublicIp, "/32" ] ]
+          - IpProtocol: tcp
+            FromPort: 135
+            ToPort: 135
+            CidrIp: 0.0.0.0/0
+
+      SecurityGroupEgress:
+        - !If
+          - HasPeerIp
+          - IpProtocol: tcp
+            FromPort: 135
+            ToPort: 135
+            CidrIp: !Join [ "", [ !Ref PeerPublicIp, "/32" ] ]
+          - IpProtocol: -1
+            CidrIp: 0.0.0.0/0
+
+  # -----------------------
+  # EC2 Instance
+  # -----------------------
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.nano
+
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2}}"
+
+      SubnetId: !Ref Subnet
+
+      SecurityGroupIds:
+        - !Ref FlowTestSG
+
+      Tags:
+        - Key: Name
+          Value: country-insights-135-tcp-demo-instance
+        - Key: Project
+          Value: country-insights-135-tcp-demo
+        - Key: Unique
+          Value: !Ref UniqueTag
+
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ""
+            - - "#!/bin/bash\n"
+              - "exec > /var/log/user-data.log 2>&1\n"
+              - "echo country-insights-135-tcp-demo starting\n"
+              - "PEER=\""
+              - !Ref PeerPublicIp
+              - "\"\n"
+              - "if [ \"$PEER\" != \"0.0.0.0\" ]; then\n"
+              - "  echo Sending TCP 135 traffic to peer\n"
+              - "  while true; do\n"
+              - "    timeout 3 bash -c \"</dev/tcp/$PEER/135\"\n"
+              - "    echo Attempt\n"
+              - "    sleep 5\n"
+              - "  done &\n"
+              - "else\n"
+              - "  echo No peer IP yet (listener mode)\n"
+              - "fi\n"
+              - "sleep 3600\n"
+              - "poweroff\n"
+
+Outputs:
+  PublicIP:
+    Value: !GetAtt Instance.PublicIp

@@ -1,0 +1,617 @@
+Parameters:
+  IllumioApiUsername:
+    Type: String
+  IllumioApiSecret:
+    Type: String
+  IllumioPceDomain:
+    Type: String
+  IllumioPcePort:
+    Type: String
+  IllumioOrgId:
+    Type: String
+Resources:
+  WorkloadSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lanturn-workload-sync
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - scheduler.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies: 
+        - PolicyName: lanturn-workload-sync
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource:
+                  - 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:log-group:/aws/lambda/*:*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeInstances'
+                  - 'scheduler:CreateSchedule'
+                Resource: '*'
+  WorkloadSyncFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: lanturn-workload-sync
+      Handler: index.lambda_handler
+      Environment: 
+          Variables: 
+            illumio_api_username:
+              Ref: IllumioApiUsername
+            illumio_api_secret:
+              Ref: IllumioApiSecret
+            illumio_pce_domain:
+              Ref: IllumioPceDomain
+            illumio_pce_port:
+              Ref: IllumioPcePort
+            illumio_org_id:
+              Ref: IllumioOrgId
+      Code:
+        ZipFile: |
+          import json,boto3,os,urllib.request,base64,ssl
+
+          def lambda_handler(event, context):
+            
+            #get illumio variables
+            #for production, set as encrypted environment variables
+            illumio_pce_domain=os.environ['illumio_pce_domain']
+            illumio_pce_port=os.environ['illumio_pce_port']
+            illumio_org_id=os.environ['illumio_org_id']
+            illumio_api_username=os.environ['illumio_api_username']
+            illumio_api_secret=os.environ['illumio_api_secret']
+            
+            #do not verify certificate
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            #get aws account number
+            response=boto3.client('sts').get_caller_identity().get('Account')
+            Account=response
+            
+            #get/create region label dimension
+            url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/label_dimensions?key=region'
+            request=urllib.request.Request(url)
+            base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+            request.add_header('Authorization','Basic %s' % base64string)
+            request.add_header('User-Agent','Mozilla')
+            response=urllib.request.urlopen(request,context=ctx).read()
+            label_response=json.loads(response)
+            #print(label_response)
+            #if no response, create
+            if not label_response:
+              url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/label_dimensions'
+              request=urllib.request.Request(url)
+              base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+              request.add_header('Authorization','Basic %s' % base64string)
+              request.add_header('User-Agent','Mozilla')
+              request.add_header('Content-Type','application/json')
+              data={"key":"region","display_name":"Region","display_info":{"initial":"re","display_name_plural":"Regions"}}
+              #print(data)
+              data_bytes=json.dumps(data).encode('utf-8')
+              response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+              #print(response)
+            
+            #for each region
+            client = boto3.client('ec2')
+            response = client.describe_regions()
+            #print('Regions:', response['Regions'])
+            Regions=response['Regions']
+            for Region in Regions:
+              #print(Region)
+              
+              #get/create region label
+              url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/labels?key=region&value=re-'+Region['RegionName']
+              request=urllib.request.Request(url)
+              base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+              request.add_header('Authorization','Basic %s' % base64string)
+              request.add_header('User-Agent','Mozilla')
+              response=urllib.request.urlopen(request,context=ctx).read()
+              label_response=json.loads(response)
+              #print(label_response)
+              #if no response, create
+              if not label_response:
+                url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/labels'
+                request=urllib.request.Request(url)
+                base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                request.add_header('Authorization','Basic %s' % base64string)
+                request.add_header('User-Agent','Mozilla')
+                request.add_header('Content-Type','application/json')
+                region_value="re-"+Region['RegionName']
+                data={"key":"region","value":region_value}
+                #print(data)
+                data_bytes=json.dumps(data).encode('utf-8')
+                response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+                #print(response)
+              
+              #get local region label href
+              url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/labels?key=region&value=re-'+Region['RegionName']
+              request=urllib.request.Request(url)
+              base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+              request.add_header('Authorization','Basic %s' % base64string)
+              request.add_header('User-Agent','Mozilla')
+              response=urllib.request.urlopen(request,context=ctx).read()
+              #print(response)
+              label_response=json.loads(response)
+              for label in label_response:
+                if label['value'] == 're-'+Region['RegionName']:
+                  region_label_href=label['href']
+              
+              #get instance names and ips
+              client = boto3.client('ec2',region_name=Region['RegionName'])
+              x=0
+              InstanceMatrix=[]
+              try:
+                response = client.describe_instances(
+                  Filters=[{'Name': 'instance-state-name','Values': ['running']}]
+                )
+              except: z=0
+              #print(response)
+              try:
+                Reservations=response['Reservations']
+                #print(Reservations)
+                for Reservation in Reservations:
+                  #print(Reservation)
+                  Instances=Reservation['Instances']
+                  #print(Instances)
+                  try:
+                    for Instance in Instances:
+                      InstanceList=[]
+                      #print(Instance)
+                      InstanceId=Instance['InstanceId']
+                      #print(InstanceId)
+                      Name=InstanceId
+                      try:
+                        Tags=Instance['Tags']
+                        for Tag in Tags:
+                          if Tag['Key'] == 'Name':
+                            Name=Tag['Value']+'-'+InstanceId
+                      except: z=0
+                      #print(Name)
+                      NetworkInterfaces=Instance['NetworkInterfaces']
+                      Ips=[]
+                      for NetworkInterface in NetworkInterfaces:
+                        try:
+                          PublicIp=NetworkInterface['Association']['PublicIp']
+                          Ips.append(PublicIp)
+                        except: z=0
+                        PrivateIpAddress=NetworkInterface['PrivateIpAddress']
+                        Ips.append(PrivateIpAddress)
+                      #print(Ips)
+                      InstanceList.append(Name)
+                      InstanceList.append(Ips)
+                      #print(InstanceList)
+                      InstanceMatrix.append(InstanceList)
+                      #x=1
+                  except: z=0
+                  #if x==1: break
+              except: z=0
+              #if x==1: break
+              #print(InstanceMatrix)
+              
+              #get unmanaged workloads created by aws-illumio-sync, delete if instance no longer exists in cloud
+              region_label_href_string='[["'+region_label_href+'"]]'
+              region_label_href_json={'labels':region_label_href_string}
+              region_label_href_encoded=urllib.parse.urlencode(region_label_href_json)
+              url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/workloads?description=Created%20by%20aws-illumio-sync&managed=false&'+region_label_href_encoded
+              request=urllib.request.Request(url)
+              base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+              request.add_header('Authorization','Basic %s' % base64string)
+              request.add_header('User-Agent','Mozilla')
+              response=urllib.request.urlopen(request,context=ctx).read()
+              workload_response=json.loads(response)
+              #print(workload_response)
+              for workload in workload_response:
+                #print(workload)
+                workload_match=0
+                for Instance in InstanceMatrix:
+                  if workload['name'].split('-')[-1] in Instance[0]: workload_match=1
+                #print(workload_match)
+                if workload_match == 0:
+                  #delete umw
+                  url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2'+workload['href']
+                  #print(url)
+                  request=urllib.request.Request(url,method='DELETE')
+                  base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                  request.add_header('Authorization','Basic %s' % base64string)
+                  request.add_header('User-Agent','Mozilla')
+                  response=urllib.request.urlopen(request,context=ctx)
+                  #print(response)
+              
+              for Instance in InstanceMatrix:
+                Name=Instance[0]
+                interfaces=[]
+                for interface in Instance[1]:
+                  interfaces.append({'name':'eni','address':interface})
+                instance_addresses=[sub['address'] for sub in interfaces]
+                ip_match=False
+                for instance_address in instance_addresses:
+                  #get illumio workload
+                  url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/workloads?ip_address='+instance_address
+                  #url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/workloads?ip_address=10.2.168.45'
+                  request=urllib.request.Request(url)
+                  base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                  request.add_header('Authorization','Basic %s' % base64string)
+                  request.add_header('User-Agent','Mozilla')
+                  response=urllib.request.urlopen(request,context=ctx).read()
+                  workload_response=json.loads(response)
+                  #print(workload_response)
+                  if workload_response:
+                    ip_match=True
+                    break
+                #if match, check addresses match
+                if ip_match == True:
+                  #if managed workload continue
+                  if workload_response[0]['managed'] == 'True': continue
+                  elif workload_response[0]['name'] != Name: continue
+                  elif workload_response[0]['description'] != 'Created by aws-illumio-sync': continue
+                  workload_response_interfaces=workload_response[0]['interfaces']
+                  #print(workload_response_interfaces)
+                  workload_response_interfaces_addresses=[]
+                  for interface in workload_response_interfaces:
+                    workload_response_interfaces_addresses.append(interface['address'])
+                  workload_response_interfaces_addresses.sort()
+                  #print(workload_response_interfaces_addresses)
+                  instance_addresses=[sub['address'] for sub in interfaces]
+                  instance_addresses.sort()
+                  #print(instance_addresses)
+                  #if interfaces match continue
+                  #print(type(workload_response_interfaces_addresses))
+                  #print(type(instance_addresses))
+                  if workload_response_interfaces_addresses == instance_addresses: continue
+                  #else update interfaces
+                  else:
+                    #update interfaces
+                    workload_href=workload_response[0]['href']
+                    url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2'+workload_href
+                    #print(url)
+                    request=urllib.request.Request(url,method='PUT')
+                    base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                    request.add_header('Authorization','Basic %s' % base64string)
+                    request.add_header('User-Agent','Mozilla')
+                    request.add_header('Content-Type','application/json')
+                    data={"interfaces":interfaces}
+                    #print(data)
+                    data_bytes=json.dumps(data).encode('utf-8')
+                    response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+                #else create illumio unmanaged workloads
+                else:
+                  #get illumio workload
+                  #print(Name)
+                  Name_encoded=urllib.parse.quote(Name)
+                  #print(Name_encoded)
+                  url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/workloads?name='+Name_encoded
+                  request=urllib.request.Request(url)
+                  base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                  request.add_header('Authorization','Basic %s' % base64string)
+                  request.add_header('User-Agent','Mozilla')
+                  response=urllib.request.urlopen(request,context=ctx).read()
+                  workload_response=json.loads(response)
+                  #print(workload_response)
+                  if workload_response:
+                    #update interfaces
+                    workload_href=workload_response[0]['href']
+                    url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2'+workload_href
+                    #print(url)
+                    request=urllib.request.Request(url,method='PUT')
+                    base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                    request.add_header('Authorization','Basic %s' % base64string)
+                    request.add_header('User-Agent','Mozilla')
+                    request.add_header('Content-Type','application/json')
+                    data={"interfaces":interfaces}
+                    #print(data)
+                    data_bytes=json.dumps(data).encode('utf-8')
+                    response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+                  #else create illumio unmanaged workload
+                  else:
+                    url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/workloads'
+                    #print(url)
+                    request=urllib.request.Request(url)
+                    base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+                    request.add_header('Authorization','Basic %s' % base64string)
+                    request.add_header('User-Agent','Mozilla')
+                    request.add_header('Content-Type','application/json')
+                    region_label_href_dict=[]
+                    region_label_href_dict.append({'href':region_label_href})
+                    data={"name":Name,"description":"Created by aws-illumio-sync","hostname":Name,"interfaces":interfaces,"labels":region_label_href_dict}
+                    #print(data)
+                    data_bytes=json.dumps(data).encode('utf-8')
+                    response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+      Role:
+        'Fn::Join':
+          - ''
+          - - 'arn:aws:iam::'
+            - Ref: AWS::AccountId
+            - ':role/'
+            - Ref: WorkloadSyncRole
+      Runtime: python3.12
+      Timeout: 900
+    DependsOn:
+      - WorkloadSyncRole
+  WorkloadSyncOneTimeSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      FlexibleTimeWindow: 
+        Mode: OFF
+      Name: WorkloadSyncOneTimeSchedule
+      ScheduleExpression: String
+      ScheduleExpressionTimezone: String
+      StartDate: String
+      State: String
+      Target: 
+        Target
+
+  WorkloadSyncEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: 123456789g1huik7o4g
+          Arn: !GetAtt WorkloadSyncFunction.Arn
+    DependsOn:
+      - WorkloadSyncFunction
+  WorkloadSyncPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WorkloadSyncFunction
+      Principal: events.amazonaws.com
+    DependsOn:
+      - PostFlowsFunction
+  FlowLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lanturn-flow-logs
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+                - lambda.amazonaws.com
+                - vpc-flow-logs.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies: 
+        - PolicyName: lanturn-flow-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                  - 'logs:PutRetentionPolicy'
+                  - 'logs:PutSubscriptionFilter'
+                  - 'logs:PutLogEvents'
+                Resource:
+                  - 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeRegions'
+                  - 'ec2:DescribeVpcs'
+                  - 'ec2:CreateFlowLogs'
+                  - 'iam:PassRole'
+                Resource: '*'
+  FlowLogsFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: lanturn-create-flow-logs
+      Handler: index.lambda_handler
+      Code:
+        ZipFile: |
+          import json,boto3
+
+          def lambda_handler(event, context):
+            
+            #get account number
+            account_number=boto3.client('sts').get_caller_identity().get('Account')
+
+            #for each region
+            client = boto3.client('ec2')
+            response = client.describe_regions()
+            #print('Regions:', response['Regions'])
+            Regions=response['Regions']
+            for Region in Regions:
+              #print(Region)
+              try:
+                #create log group
+                client = boto3.client('logs',region_name=Region['RegionName'])
+                response = client.create_log_group(logGroupName='lanturn-flowlogs')
+              except: error=True
+              try:
+                #set 1 day retention
+                client = boto3.client('logs',region_name=Region['RegionName'])
+                response = client.put_retention_policy(
+                    logGroupName='lanturn-flowlogs',
+                    retentionInDays=1
+                )
+              except: error=True
+              try:
+                #set log group events to invoke post flows function
+                client = boto3.client('logs',region_name=Region['RegionName'])
+                response = client.put_subscription_filter(
+                  logGroupName='lanturn-flowlogs',
+                  filterName='all-events',
+                  filterPattern='',
+                  destinationArn='arn:aws:lambda:'+Region['RegionName']+':'+account_number+':function:lanturn-post-flows'
+                )
+              except: error=True
+              #get vpcs
+              client = boto3.client('ec2',region_name=Region['RegionName'])
+              response = client.describe_vpcs()
+              Vpcs=response['Vpcs']
+              for Vpc in Vpcs:
+                VpcId=Vpc['VpcId']
+                try:
+                  #create flow log
+                  response = client.create_flow_logs(
+                    DeliverLogsPermissionArn='arn:aws:iam::'+account_number+':role/lanturn-flow-logs',
+                    LogGroupName='lanturn-flowlogs',
+                    ResourceIds=[VpcId],
+                    ResourceType='VPC',
+                    TrafficType='ALL',
+                    LogDestinationType='cloud-watch-logs'
+                  )
+                except: error=True
+      Role:
+        'Fn::Join':
+          - ''
+          - - 'arn:aws:iam::'
+            - Ref: AWS::AccountId
+            - ':role/'
+            - Ref: FlowLogsRole
+      Runtime: python3.12
+      Timeout: 900
+    DependsOn:
+      - FlowLogsRole
+      - PostFlowsFunction
+  FlowLogsEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(1 minute)
+      State: ENABLED
+      Targets:
+        - Id: 1ke4qq1h8g1huik7o4g
+          Arn: !GetAtt FlowLogsFunction.Arn
+    DependsOn:
+      - FlowLogsFunction
+  FlowLogsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FlowLogsFunction
+      Principal: events.amazonaws.com
+    DependsOn:
+      - PostFlowsFunction
+  PostFlowsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lanturn-post-flows
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies: 
+        - PolicyName: lanturn-post-flows
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource:
+                  - 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:log-group:/aws/lambda/*:*'
+  PostFlowsFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: lanturn-post-flows
+      Handler: index.lambda_handler
+      Environment: 
+          Variables: 
+            illumio_api_username:
+              Ref: IllumioApiUsername
+            illumio_api_secret:
+              Ref: IllumioApiSecret
+            illumio_pce_domain:
+              Ref: IllumioPceDomain
+            illumio_pce_port:
+              Ref: IllumioPcePort
+            illumio_org_id:
+              Ref: IllumioOrgId
+      Code:
+        ZipFile: |
+          import gzip,json,base64,urllib.request,ssl,os
+
+          def lambda_handler(event, context):
+            
+            #get illumio variables
+            #for production, set as encrypted environment variables
+            illumio_pce_domain=os.environ['illumio_pce_domain']
+            illumio_pce_port=os.environ['illumio_pce_port']
+            illumio_org_id=os.environ['illumio_org_id']
+            illumio_api_username=os.environ['illumio_api_username']
+            illumio_api_secret=os.environ['illumio_api_secret']
+            
+            #do not verify certificate
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            #parse cloudwatch log group flow event
+            cw_data = event['awslogs']['data']
+            compressed_payload = base64.b64decode(cw_data)
+            uncompressed_payload = gzip.decompress(compressed_payload)
+            payload = json.loads(uncompressed_payload)
+
+            log_events = payload['logEvents']
+            for log_event in log_events:
+
+              flow=log_event['message']
+              #print(flow)
+              
+              source_ip=flow.split()[3]
+              dest_ip=flow.split()[4]
+              dest_port=flow.split()[6]
+              proto=flow.split()[7]
+              #print(str(source_ip+','+dest_ip+','+dest_port+','+proto))
+
+              url='https://'+illumio_pce_domain+':'+illumio_pce_port+'/api/v2/orgs/'+illumio_org_id+'/agents/bulk_traffic_flows'
+              request=urllib.request.Request(url)
+              base64string=base64.b64encode((illumio_api_username+':'+illumio_api_secret).encode()).decode()
+              request.add_header('Authorization','Basic %s' % base64string)
+              request.add_header('User-Agent','Mozilla')
+              request.add_header('Content-Type','application/json')
+              data=source_ip+','+dest_ip+','+dest_port+','+proto
+              #print(data)
+              data_bytes=json.dumps(data).encode('utf-8')
+              response=urllib.request.urlopen(request,data_bytes,context=ctx).read()
+              #print(response)
+      Role:
+        'Fn::Join':
+          - ''
+          - - 'arn:aws:iam::'
+            - Ref: AWS::AccountId
+            - ':role/'
+            - Ref: PostFlowsRole
+      Runtime: python3.12
+      Timeout: 900
+    DependsOn:
+      - PostFlowsRole
+  PostFlowsFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref PostFlowsFunction
+      Principal: logs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:lanturn-flowlogs:*"
+    DependsOn:
+      - PostFlowsFunction
+
+#copy post flowss function to all regions
+#cwe kick off now
