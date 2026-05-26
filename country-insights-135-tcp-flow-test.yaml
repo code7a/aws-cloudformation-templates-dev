@@ -1,15 +1,30 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: country-insights-135-tcp-demo (Seoul -> Ohio TCP 135)
+
+Description: >
+  Cross-region TCP 135 test (ap-northeast-2 -> us-east-2).
+  Deploy first in us-east-2 (listener), then in ap-northeast-2 (sender).
+
+Metadata:
+  Instructions:
+    Step0: Create two stacks in different regions: us-east-2 and ap-northeast-2
+    Step1: Deploy FIRST in us-east-2 with PeerPublicIp = 0.0.0.0
+    Step2: After deployment, copy the PublicIP output
+    Step3: Deploy SECOND in ap-northeast-2
+    Step4: Set PeerPublicIp to the us-east-2 instance public IP
+    Result: ap-northeast-2 instance will send TCP 135 traffic to us-east-2
+    Cleanup: Delete both stacks when finished to avoid charges
 
 Parameters:
   PeerPublicIp:
     Type: String
     Default: 0.0.0.0
-    Description: Public IP of peer instance
+    Description: >
+      Peer public IP. Use 0.0.0.0 for first deployment (us-east-2),
+      then provide that IP when deploying in ap-northeast-2
 
   UniqueTag:
     Type: String
-    Description: Unique tag value
+    Description: Unique value to avoid naming conflicts (example: run1)
 
 Conditions:
   HasPeerIp: !Not [ !Equals [ !Ref PeerPublicIp, "0.0.0.0" ] ]
@@ -27,14 +42,14 @@ Resources:
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: country-insights-135-tcp-demo-vpc
+          Value: !Sub country-insights-135-vpc-${UniqueTag}
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: test-igw
+          Value: !Sub country-insights-135-igw-${UniqueTag}
 
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -48,7 +63,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: country-insights-135-tcp-demo-rt
+          Value: !Sub country-insights-135-rt-${UniqueTag}
 
   Route:
     Type: AWS::EC2::Route
@@ -67,7 +82,7 @@ Resources:
       AvailabilityZone: !Select [0, !GetAZs ""]
       Tags:
         - Key: Name
-          Value: country-insights-135-tcp-demo-subnet
+          Value: !Sub country-insights-135-subnet-${UniqueTag}
 
   SubnetRouteAssoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -86,7 +101,7 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: country-insights-135-tcp-demo-sg
+          Value: !Sub country-insights-135-sg-${UniqueTag}
 
       SecurityGroupIngress:
         - !If
@@ -94,7 +109,7 @@ Resources:
           - IpProtocol: tcp
             FromPort: 135
             ToPort: 135
-            CidrIp: !Join [ "", [ !Ref PeerPublicIp, "/32" ] ]
+            CidrIp: !Sub "${PeerPublicIp}/32"
           - IpProtocol: tcp
             FromPort: 135
             ToPort: 135
@@ -106,7 +121,7 @@ Resources:
           - IpProtocol: tcp
             FromPort: 135
             ToPort: 135
-            CidrIp: !Join [ "", [ !Ref PeerPublicIp, "/32" ] ]
+            CidrIp: !Sub "${PeerPublicIp}/32"
           - IpProtocol: -1
             CidrIp: 0.0.0.0/0
 
@@ -128,35 +143,37 @@ Resources:
 
       Tags:
         - Key: Name
-          Value: country-insights-135-tcp-demo-instance
+          Value: !Sub country-insights-135-instance-${UniqueTag}
         - Key: Project
-          Value: country-insights-135-tcp-demo
+          Value: country-insights-135
         - Key: Unique
           Value: !Ref UniqueTag
 
       UserData:
         Fn::Base64:
-          Fn::Join:
-            - ""
-            - - "#!/bin/bash\n"
-              - "exec > /var/log/user-data.log 2>&1\n"
-              - "echo country-insights-135-tcp-demo starting\n"
-              - "PEER=\""
-              - !Ref PeerPublicIp
-              - "\"\n"
-              - "if [ \"$PEER\" != \"0.0.0.0\" ]; then\n"
-              - "  echo Sending TCP 135 traffic to peer\n"
-              - "  while true; do\n"
-              - "    timeout 3 bash -c \"</dev/tcp/$PEER/135\"\n"
-              - "    echo Attempt\n"
-              - "    sleep 5\n"
-              - "  done &\n"
-              - "else\n"
-              - "  echo No peer IP yet (listener mode)\n"
-              - "fi\n"
-              - "sleep 3600\n"
-              - "poweroff\n"
+          Fn::Sub: |
+            #!/bin/bash
+            exec > /var/log/user-data.log 2>&1
+
+            echo "country-insights-135 starting"
+
+            PEER="${PeerPublicIp}"
+
+            if [ "$PEER" != "0.0.0.0" ]; then
+              echo "Sending TCP 135 traffic to peer"
+              while true; do
+                timeout 3 bash -c "</dev/tcp/$PEER/135"
+                echo "Attempt"
+                sleep 5
+              done &
+            else
+              echo "Listener mode"
+            fi
+
+            sleep 3600
+            poweroff
 
 Outputs:
   PublicIP:
+    Description: Public IP of EC2 instance (use this for second deployment)
     Value: !GetAtt Instance.PublicIp
